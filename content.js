@@ -193,6 +193,14 @@
     schedule();
   });
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+    if (message?.type === 'READER_DIAGNOSTICS') {
+      try {
+        const panel = document.querySelector('main') || document.body;
+        const text = safeSettingsText(panel);
+        respond({ usageURL: C.isUsageURL(location.href), headings: panel.querySelectorAll('h1,h2,h3,[role="heading"]').length, size: text.length, parsed: U.parse(text), detected: !!usagePanel() });
+      } catch (error) { respond({ error: error.message }); }
+      return;
+    }
     if (message?.type !== 'READ_USAGE_NOW') return;
     capture(true).then(ok => respond({ ok })).catch(() => respond({ ok: false }));
     return true;

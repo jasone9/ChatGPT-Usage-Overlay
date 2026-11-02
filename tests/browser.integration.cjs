@@ -129,7 +129,14 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
     diagnostics.workers = context?.serviceWorkers().map(worker => worker.url());
     const worker = context?.serviceWorkers()[0];
     if (worker) {
-      try { diagnostics.storage = await worker.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) })); } catch {}
+      try {
+        diagnostics.storage = await worker.evaluate(async () => {
+          const local = await chrome.storage.local.get(null), session = await chrome.storage.session.get(null);
+          let probe;
+          try { probe = await chrome.tabs.sendMessage(session.reader?.tabId, { type: 'READER_DIAGNOSTICS' }); } catch (error) { probe = { error: error.message }; }
+          return { local, session, probe };
+        });
+      } catch {}
     }
     throw error;
   } finally {
