@@ -7,6 +7,10 @@ const { chromium } = require('playwright');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const os = require('node:os');
+const http = require('node:http');
+const https = require('node:https');
+const net = require('node:net');
+const { execFileSync } = require('node:child_process');
 const composer = '<form><textarea id="prompt-textarea" aria-label="Message" placeholder="Message ChatGPT"></textarea><button type="submit">Send</button></form>';
 const chatHTML = `<!doctype html><html><head><title>Chat fixture</title><style>
 body { margin:0; background:#151918; color:#e0e6e3; font:16px/1.5 sans-serif; }
@@ -35,18 +39,43 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
   let context;
   const diagnostics = { stage: 'launching Chromium', checks: [], error: null };
   const step = async (name, run) => { diagnostics.stage = name; console.log(name); await run(); diagnostics.checks.push(name); };
+  let amounts = [94, 99], showLogin = false;
+  let usageRequests = 0;
+  const sockets = new Set();
+  const track = socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); };
+  // An actual local HTTPS fixture server also covers the first request of extension-created tabs.
+  // Playwright route interception can miss that first navigation before attaching to the new target.
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(profile, 'key.pem'), '-out', path.join(profile, 'cert.pem'), '-subj', '/CN=chatgpt.com', '-days', '1'], { stdio: 'ignore' });
+  const fixture = https.createServer({ key: await fs.readFile(path.join(profile, 'key.pem')), cert: await fs.readFile(path.join(profile, 'cert.pem')) }, (request, response) => {
+    const usage = new URL(request.url, 'https://chatgpt.com').pathname === '/settings/usage';
+    if (usage) usageRequests++;
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+    response.end(usage ? (showLogin ? '<h1>Sign in to ChatGPT</h1>' : usageHTML(...amounts)) : chatHTML);
+  });
+  fixture.on('connection', track);
+  await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
+  const proxy = http.createServer((_request, response) => { response.writeHead(502); response.end(); });
+  proxy.on('connection', track);
+  proxy.on('connect', (request, socket, head) => {
+    if (request.url !== 'chatgpt.com:443') { socket.destroy(); return; }
+    const upstream = net.connect(fixture.address().port, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head.length) upstream.write(head);
+      socket.pipe(upstream); upstream.pipe(socket);
+    });
+    track(upstream);
+    upstream.on('error', () => socket.destroy());
+    socket.on('error', () => upstream.destroy());
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
   try {
     context = await chromium.launchPersistentContext(profile, {
       channel: 'chromium', headless: !process.env.CI, colorScheme: 'dark', viewport: { width: 1100, height: 800 },
-      args: ['--no-sandbox', `--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
+      ignoreHTTPSErrors: true,
+      proxy: { server: `http://127.0.0.1:${proxy.address().port}` },
+      args: ['--no-sandbox', '--ignore-certificate-errors', `--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
     });
     diagnostics.stage = 'waiting for extension service worker';
-    let amounts = [94, 99], showLogin = false;
-    await context.route('https://chatgpt.com/**', async route => {
-      const url = new URL(route.request().url());
-      const usage = url.pathname === '/settings/usage';
-      await route.fulfill({ contentType: 'text/html', body: usage ? (showLogin ? '<h1>Sign in to ChatGPT</h1>' : usageHTML(...amounts)) : chatHTML });
-    });
     let [worker] = context.serviceWorkers();
     if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
     const id = worker.url().split('/')[2];
@@ -125,6 +154,7 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
     diagnostics.stage = 'passed';
   } catch (error) {
     diagnostics.error = error.message;
+    diagnostics.usageRequests = usageRequests;
     diagnostics.pages = context?.pages().map(page => page.url());
     diagnostics.workers = context?.serviceWorkers().map(worker => worker.url());
     const worker = context?.serviceWorkers()[0];
@@ -143,6 +173,9 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
     await fs.mkdir('test-results', { recursive: true });
     await fs.writeFile('test-results/browser-diagnostics.json', JSON.stringify(diagnostics, null, 2));
     await context?.close();
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => proxy.close(resolve));
+    await new Promise(resolve => fixture.close(resolve));
     await fs.rm(profile, { recursive: true, force: true });
   }
 });

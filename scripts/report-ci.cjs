@@ -12,8 +12,9 @@ const fs = require('node:fs');
     ['Browser diagnostics / pages', JSON.stringify(data.pages || []), 'success'],
     ['Browser diagnostics / worker', JSON.stringify(data.workers || []), 'success'],
     ['Browser diagnostics / reader', JSON.stringify(data.storage?.session?.reader || {}), 'success'],
-    ['Browser diagnostics / status', JSON.stringify(data.storage?.local?.readerStatus || {}), 'success']
-    ,['Browser diagnostics / probe', JSON.stringify(data.storage?.probe || {}), 'success']
+    ['Browser diagnostics / status', JSON.stringify(data.storage?.local?.readerStatus || {}), 'success'],
+    ['Browser diagnostics / probe', JSON.stringify(data.storage?.probe || {}), 'success'],
+    ['Browser diagnostics / fixture requests', String(data.usageRequests ?? 'passed'), 'success']
   ];
   for (const [context, description, state] of details) {
     const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/statuses/${process.env.GITHUB_SHA}`, {
