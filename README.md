@@ -77,7 +77,7 @@ The fast test suite exercises parsing against the supplied screenshot's text lay
 
 The separate Chromium integration suite loads the actual unpacked extension, intercepts ChatGPT pages with local HTML fixtures, and checks automatic source-tab creation, background refresh, overlay positioning, conversation-text exclusion, composer replacement, narrow layouts, popup pause, and error states. **Fixture tests do not verify a live signed-in ChatGPT account.**
 
-GitHub Actions runs syntax, logic, and browser integration tests on pushes and pull requests. Browser fixture screenshots are test artifacts and contain no real account data.
+GitHub Actions runs syntax, logic, and browser integration tests on pushes and pull requests. Browser test diagnostics are test artifacts and contain no real account data.
 
 The build workspace could run the fast tests and syntax checks. It could not launch Chromium because no browser was installed and browser/package downloads were blocked; browser execution is therefore delegated to the repository's CI. See the Actions result for the pushed commit, and do not treat the presence of a browser test file as a passing result.
 

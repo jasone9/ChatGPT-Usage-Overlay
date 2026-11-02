@@ -95,8 +95,6 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       const formRect = await chat.locator('form').boundingBox();
       const barRect = await bar.boundingBox();
       assert.ok(barRect.y >= formRect.y + formRect.height - 1, 'Overlay belongs below composer');
-      await fs.mkdir('test-results', { recursive: true });
-      await chat.screenshot({ path: 'test-results/automatic-overlay.png' });
     });
     await step('ignores usage-like text and dialogs inside the conversation', async () => {
       await chat.locator('article').evaluate(el => { el.innerHTML = '<div role="dialog"><h2>Usage</h2><p>5 hour usage limit</p><p>1% left</p><p>Weekly usage limit</p><p>2% left</p></div>'; });
