@@ -33,11 +33,14 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'usage-under-chat-'));
   const extension = path.resolve(__dirname, '..');
   let context;
+  const diagnostics = { stage: 'launching Chromium', checks: [], error: null };
+  const step = async (name, run) => { diagnostics.stage = name; console.log(name); await run(); diagnostics.checks.push(name); };
   try {
     context = await chromium.launchPersistentContext(profile, {
-      channel: 'chromium', headless: true, colorScheme: 'dark', viewport: { width: 1100, height: 800 },
+      channel: 'chromium', headless: !process.env.CI, colorScheme: 'dark', viewport: { width: 1100, height: 800 },
       args: ['--no-sandbox', `--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
     });
+    diagnostics.stage = 'waiting for extension service worker';
     let amounts = [94, 99], showLogin = false;
     await context.route('https://chatgpt.com/**', async route => {
       const url = new URL(route.request().url());
@@ -45,13 +48,13 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await route.fulfill({ contentType: 'text/html', body: usage ? (showLogin ? '<h1>Sign in to ChatGPT</h1>' : usageHTML(...amounts)) : chatHTML });
     });
     let [worker] = context.serviceWorkers();
-    if (!worker) worker = await context.waitForEvent('serviceworker');
+    if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
     const id = worker.url().split('/')[2];
     const chat = await context.newPage();
     await chat.goto('https://chatgpt.com/c/test');
     const bar = chat.locator('#usage-under-chat-extension');
     const saved = () => worker.evaluate(async () => (await chrome.storage.local.get('usageSnapshot')).usageSnapshot);
-    await t.test('opens the inactive source and displays actual parsed fixture values without setup', async () => {
+    await step('opens the inactive source and displays actual parsed fixture values without setup', async () => {
       await eventually(async () => (await saved())?.windows?.weekly?.remaining === 99);
       await bar.getByText('94% left', { exact: true }).waitFor();
       await bar.getByText('99% left', { exact: true }).waitFor();
@@ -66,13 +69,13 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await fs.mkdir('test-results', { recursive: true });
       await chat.screenshot({ path: 'test-results/automatic-overlay.png' });
     });
-    await t.test('ignores usage-like text and dialogs inside the conversation', async () => {
+    await step('ignores usage-like text and dialogs inside the conversation', async () => {
       await chat.locator('article').evaluate(el => { el.innerHTML = '<div role="dialog"><h2>Usage</h2><p>5 hour usage limit</p><p>1% left</p><p>Weekly usage limit</p><p>2% left</p></div>'; });
       await new Promise(resolve => setTimeout(resolve, 800));
       assert.equal((await saved()).windows.weekly.remaining, 99);
     });
     const source = context.pages().find(page => page.url() === 'https://chatgpt.com/settings/usage');
-    await t.test('refresh alarm updates the overlay from a newly loaded source page', async () => {
+    await step('refresh alarm updates the overlay from a newly loaded source page', async () => {
       amounts = [63, 80];
       await worker.evaluate(async () => {
         const { reader } = await chrome.storage.session.get('reader');
@@ -84,19 +87,19 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await bar.getByText('63% left', { exact: true }).waitFor();
       assert.equal(context.pages().filter(page => page.url() === source.url()).length, 1);
     });
-    await t.test('recovers after the app replaces its composer', async () => {
+    await step('recovers after the app replaces its composer', async () => {
       await chat.locator('#composer-root').evaluate((el, html) => { el.innerHTML = html; }, composer);
       await bar.getByText('80% left', { exact: true }).waitFor();
       assert.equal(await chat.locator('#usage-under-chat-extension').count(), 1);
     });
-    await t.test('fits a narrow viewport without horizontal overflow', async () => {
+    await step('fits a narrow viewport without horizontal overflow', async () => {
       await chat.setViewportSize({ width: 390, height: 844 });
       await bar.getByText('63% left', { exact: true }).waitFor();
       assert.equal(await chat.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     });
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${id}/popup.html`);
-    await t.test('popup can pause automatic reads without a paste or screenshot flow', async () => {
+    await step('popup can pause automatic reads without a paste or screenshot flow', async () => {
       assert.equal(await popup.locator('textarea').count(), 0);
       await popup.locator('#automatic').uncheck();
       await eventually(() => worker.evaluate(async () => (await chrome.storage.local.get('autoEnabled')).autoEnabled === false));
@@ -108,7 +111,7 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await source.reload();
       await popup.locator('#automatic').check();
     });
-    await t.test('a missing or signed-out source preserves the last read and reports failure', async () => {
+    await step('a missing or signed-out source preserves the last read and reports failure', async () => {
       showLogin = true;
       await worker.evaluate(async () => {
         const { reader } = await chrome.storage.session.get('reader');
@@ -119,7 +122,19 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await eventually(() => worker.evaluate(async () => (await chrome.storage.local.get('readerStatus')).readerStatus.state === 'error'));
       assert.equal((await saved()).windows.weekly.remaining, 80);
     });
+    diagnostics.stage = 'passed';
+  } catch (error) {
+    diagnostics.error = error.message;
+    diagnostics.pages = context?.pages().map(page => page.url());
+    diagnostics.workers = context?.serviceWorkers().map(worker => worker.url());
+    const worker = context?.serviceWorkers()[0];
+    if (worker) {
+      try { diagnostics.storage = await worker.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) })); } catch {}
+    }
+    throw error;
   } finally {
+    await fs.mkdir('test-results', { recursive: true });
+    await fs.writeFile('test-results/browser-diagnostics.json', JSON.stringify(diagnostics, null, 2));
     await context?.close();
     await fs.rm(profile, { recursive: true, force: true });
   }
