@@ -5,60 +5,14 @@
   const U = globalThis.UsageUnderChat;
   const C = globalThis.UsageReaderConfig;
   const HOST_ID = 'usage-under-chat-extension';
-  const EXCLUDE = 'article, [data-message-author-role], [data-testid*="conversation-turn"], pre, code, nav, aside, [contenteditable="true"], textarea';
   let saved = null, enabled = true, autoEnabled = true, readerStatus = null, host = null, root = null;
-  let previousPanel = null, previousValues = '', timer = null, stopped = false, saving = false;
+  let timer = null, stopped = false;
   let helpOpen = false, lastRender = '', announced = false;
 
   function visible(element) {
     if (!element || !element.isConnected || element.closest('[hidden], [aria-hidden="true"]')) return false;
     const style = getComputedStyle(element);
     return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
-  }
-  function safeSettingsText(panel) {
-    let size = 0;
-    function read(node) {
-      if (size > 24000) return '';
-      if (node.nodeType === Node.TEXT_NODE) { size += node.textContent.length; return node.textContent; }
-      if (node.nodeType !== Node.ELEMENT_NODE || !visible(node) || node.matches(`${EXCLUDE},script,style,#${HOST_ID}`)) return '';
-      const block = /^(DIV|SECTION|P|H[1-6]|LI|BR)$/.test(node.tagName);
-      return `${block ? '\n' : ''}${[...node.childNodes].map(read).join('')}${block ? '\n' : ''}`;
-    }
-    return read(panel).slice(0, 24001);
-  }
-  function usagePanel() {
-    // Never scan chat messages for percentages. Only Settings dialogs or explicit usage routes.
-    const candidates = [...document.querySelectorAll('[role="dialog"], dialog, [role="tabpanel"]')];
-    if (C.isUsageURL(location.href)) {
-      candidates.push(document.querySelector('main'), document.body);
-    }
-    for (const panel of candidates) {
-      if (!visible(panel) || panel.closest(EXCLUDE)) continue;
-      const title = [...panel.querySelectorAll('h1,h2,h3,[role="heading"],[role="tab"][aria-selected="true"]')]
-        .some(el => visible(el) && !el.closest(EXCLUDE) && /^(usage(?:\s*(?:&|and)\s*billing)?|general usage limits)$/i.test(el.textContent.trim()));
-      if (!title) continue;
-      const windows = U.parse(safeSettingsText(panel));
-      if (windows) return { panel, windows };
-    }
-    return null;
-  }
-  async function capture(force = false) {
-    if (saving) return false;
-    const found = usagePanel();
-    if (!found) { previousPanel = null; previousValues = ''; return false; }
-    const fingerprint = JSON.stringify(found.windows);
-    if (!force && previousPanel === found.panel && previousValues === fingerprint) return true;
-    saving = true;
-    try {
-      if (!autoEnabled) return false;
-      const result = await chrome.runtime.sendMessage({ type: 'USAGE_READING', windows: found.windows });
-      if (!result?.ok) return false;
-      previousPanel = found.panel;
-      previousValues = fingerprint;
-      render();
-      return true;
-    } catch { return false; }
-    finally { saving = false; }
   }
   function composerAnchor() {
     const editors = document.querySelectorAll('#prompt-textarea, [contenteditable="true"][role="textbox"], [data-slate-editor="true"], [data-lexical-editor="true"], textarea[placeholder]');
@@ -116,9 +70,9 @@
       <button id="update" type="button" aria-expanded="false" aria-controls="help">Info</button>
     </div><div id="help" class="help" hidden>
       <p><b>Your Usage is read automatically</b></p>
-      <p>A Usage tab stays open in the background and is checked about every 2 minutes while a ChatGPT tab is open. The time shows the last successful read; changes can take a little while to appear.</p>
-      <p>No screenshots or copying needed. If numbers don’t appear, click the extension icon and choose Open Usage reader to check whether it needs you to sign in.</p>
-      <p>The numbers belong to the account and workspace selected in that Usage tab.</p>
+      <p>Usage is checked about every 2 minutes through your existing ChatGPT tab. The time shows the last successful read; changes can take a little while to appear.</p>
+      <p>You can close the old Usage tab. If numbers don’t appear, sign in to ChatGPT normally and choose Refresh.</p>
+      <p>The numbers belong to the account returned by your ChatGPT session. The extension popup has a link to Usage settings if you want to compare.</p>
     </div></div>`;
     root.getElementById('refresh').addEventListener('click', () => {
       chrome.runtime.sendMessage({ type: 'REFRESH_USAGE' }).catch(() => {});
@@ -165,7 +119,7 @@
     const state = !autoEnabled ? 'Paused' : readerStatus?.state === 'reading' ? 'Checking…' : readerStatus?.state === 'error' ? 'Reader needs attention' : 'Auto';
     status.textContent = snapshot ? `${state} · read ${age}${stale ? ' · may be outdated' : ''}` : readerStatus?.detail || 'Starting automatic reader…';
     status.className = `age${stale ? ' stale' : ''}`;
-    status.title = snapshot ? `Last read ${new Date(snapshot.capturedAt).toLocaleString()}. Reset labels are copied from Usage. ${readerStatus?.detail || ''}` : readerStatus?.detail || 'Usage is read automatically in a background tab.';
+    status.title = snapshot ? `Last read ${new Date(snapshot.capturedAt).toLocaleString()}. Reset times use your browser’s time zone. ${readerStatus?.detail || ''}` : readerStatus?.detail || 'Usage is checked through your existing ChatGPT tab.';
     const update = root.getElementById('update');
     update.textContent = helpOpen ? 'Close' : 'Info';
     update.setAttribute('aria-expanded', String(helpOpen));
@@ -186,7 +140,7 @@
   async function tick() {
     timer = null;
     if (stopped) return;
-    try { mount(); await capture(); }
+    try { mount(); }
     catch { /* Replaced DOM nodes are retried on the next mutation. */ }
   }
   function schedule() {
@@ -200,20 +154,14 @@
     if (changes.usageSnapshot) saved = changes.usageSnapshot.newValue || null;
     if (changes.overlayEnabled) enabled = changes.overlayEnabled.newValue !== false;
     if (changes.autoEnabled) autoEnabled = changes.autoEnabled.newValue !== false;
+    if (!autoEnabled) globalThis.DirectUsageReader.cancel();
     if (changes.readerStatus) readerStatus = changes.readerStatus.newValue || null;
     schedule();
   });
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-    if (message?.type === 'READER_DIAGNOSTICS') {
-      try {
-        const panel = document.querySelector('main') || document.body;
-        const text = safeSettingsText(panel);
-        respond({ usageURL: C.isUsageURL(location.href), headings: panel.querySelectorAll('h1,h2,h3,[role="heading"]').length, size: text.length, parsed: U.parse(text), detected: !!usagePanel() });
-      } catch (error) { respond({ error: error.message }); }
-      return;
-    }
-    if (message?.type !== 'READ_USAGE_NOW') return;
-    capture(true).then(ok => respond({ ok })).catch(() => respond({ ok: false }));
+    if (_sender.id !== chrome.runtime.id || message?.type !== 'FETCH_DIRECT_USAGE' || !C.isChatGPT(location.href)) return;
+    if (!autoEnabled) { respond({ ok: false, code: 'paused' }); return; }
+    globalThis.DirectUsageReader.read().then(respond).catch(() => respond({ ok: false, code: 'network' }));
     return true;
   });
   chrome.storage.local.get(['usageSnapshot', 'overlayEnabled', 'autoEnabled', 'readerStatus']).then(data => {
@@ -225,7 +173,7 @@
     schedule();
   }).catch(() => { stopped = true; });
   // Update age labels and recover if the app replaces the composer without useful mutations.
-  const interval = setInterval(schedule, 15000);
+  const interval = setInterval(schedule, 60000);
   addEventListener('pageshow', schedule);
   addEventListener('visibilitychange', () => {
     if (!document.hidden && announced) chrome.runtime.sendMessage({ type: 'CHAT_READY' }).catch(() => {});
@@ -234,5 +182,6 @@
   addEventListener('pagehide', event => {
     if (event.persisted) return;
     stopped = true; observer.disconnect(); clearInterval(interval); clearTimeout(timer);
+    globalThis.DirectUsageReader.cancel();
   });
 })();

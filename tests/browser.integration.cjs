@@ -19,14 +19,12 @@ form { padding:16px; border:1px solid #58635e; border-radius:16px; }
 textarea { display:block; box-sizing:border-box; width:100%; min-height:80px; background:#262d29; color:white; border:0; }
 button { margin-top:8px; } article { padding:20px 0; }
 </style></head><body><main><h1>Chat fixture</h1><article data-message-author-role="assistant">Conversation content.</article><div id="composer-root">${composer}</div></main></body></html>`;
-function usageHTML(fiveHour, weekly) {
-  return `<!doctype html><html><head><title>Usage reader fixture</title></head><body><main>
-  <h1>Usage</h1><h2>General usage limits</h2>
-  <section><h3>Monthly usage limit</h3><p>0 of 0 credits used</p><div>0% remaining</div></section>
-  <section><div><h3>5 hour usage limit</h3><p>Resets 6:25 PM</p></div><div>${fiveHour}% left</div></section>
-  <section><div><h3>Weekly usage limit</h3><p>Resets Nov 9, 2026, 1:25 PM</p></div><div>${weekly}% left</div></section>
-  <div style="display:none"><h3>Weekly usage limit</h3><p>1% left</p></div>
-  </main></body></html>`;
+function usagePayload(fiveHour, weekly) {
+  const now = Math.floor(Date.now() / 1000);
+  return { account_id: 'workspace-fixture', rate_limit: {
+    primary_window: { used_percent: 100 - fiveHour, limit_window_seconds: 18000, reset_at: now + 3600 },
+    secondary_window: { used_percent: 100 - weekly, limit_window_seconds: 604800, reset_at: now + 604800 }
+  } };
 }
 async function eventually(check, timeout = 20000) {
   const until = Date.now() + timeout;
@@ -39,18 +37,34 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
   let context;
   const diagnostics = { stage: 'launching Chromium', checks: [], error: null };
   const step = async (name, run) => { diagnostics.stage = name; console.log(name); await run(); diagnostics.checks.push(name); };
-  let amounts = [94, 99], showLogin = false;
-  let usageRequests = 0;
+  let amounts = [94, 99], showLogin = false, usageMode = 'ok';
+  let usageRequests = 0, sessionRequests = 0, settingsRequests = 0, chatRequests = 0;
+  const fixtureToken = 'fixture-access-token-never-persist';
   const sockets = new Set();
   const track = socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); };
   // An actual local HTTPS fixture server also covers the first request of extension-created tabs.
   // Playwright route interception can miss that first navigation before attaching to the new target.
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(profile, 'key.pem'), '-out', path.join(profile, 'cert.pem'), '-subj', '/CN=chatgpt.com', '-days', '1'], { stdio: 'ignore' });
   const fixture = https.createServer({ key: await fs.readFile(path.join(profile, 'key.pem')), cert: await fs.readFile(path.join(profile, 'cert.pem')) }, (request, response) => {
-    const usage = new URL(request.url, 'https://chatgpt.com').pathname === '/settings/usage';
-    if (usage) usageRequests++;
-    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
-    response.end(usage ? (showLogin ? '<h1>Sign in to ChatGPT</h1>' : usageHTML(...amounts)) : chatHTML);
+    const pathname = new URL(request.url, 'https://chatgpt.com').pathname;
+    const json = (body, status = 200, extra = {}) => {
+      response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra }); response.end(JSON.stringify(body));
+    };
+    if (pathname === '/api/auth/session') {
+      sessionRequests++;
+      if (showLogin || !request.headers.cookie?.includes('fixture-session=yes')) { json({}, 401); return; }
+      json({ accessToken: fixtureToken, user: { id: 'user-fixture' }, account: { id: 'workspace-fixture' } }); return;
+    }
+    if (pathname === '/backend-api/wham/usage') {
+      usageRequests++;
+      if (request.headers.authorization !== `Bearer ${fixtureToken}` || request.headers['chatgpt-account-id'] !== 'workspace-fixture') { json({}, 403); return; }
+      if (usageMode === 'rate-limited') { json({}, 429, { 'Retry-After': '300' }); return; }
+      json(usagePayload(...amounts)); return;
+    }
+    if (pathname === '/settings/usage') settingsRequests++;
+    if (pathname === '/c/test') chatRequests++;
+    response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store', 'Set-Cookie': 'fixture-session=yes; Path=/; Secure; HttpOnly; SameSite=Lax' });
+    response.end(chatHTML);
   });
   fixture.on('connection', track);
   await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
@@ -83,7 +97,7 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
     await chat.goto('https://chatgpt.com/c/test');
     const bar = chat.locator('#usage-under-chat-extension');
     const saved = () => worker.evaluate(async () => (await chrome.storage.local.get('usageSnapshot')).usageSnapshot);
-    await step('opens the inactive source and displays actual parsed fixture values without setup', async () => {
+    await step('reads authenticated usage in the existing chat without opening any Usage tab', async () => {
       await eventually(async () => (await saved())?.windows?.weekly?.remaining === 99);
       await bar.getByText('94% left', { exact: true }).waitFor();
       await bar.getByText('99% left', { exact: true }).waitFor();
@@ -91,8 +105,13 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       assert.equal(await bar.getByRole('progressbar', { name: '5-hour allowance remaining', exact: true }).getAttribute('value'), '94');
       assert.equal(await bar.getByRole('progressbar', { name: 'Weekly allowance remaining', exact: true }).getAttribute('value'), '99');
       assert.match(await bar.locator('#age').innerText(), /Auto · read just now/);
-      const source = context.pages().filter(page => page.url() === 'https://chatgpt.com/settings/usage');
-      assert.equal(source.length, 1);
+      assert.equal(context.pages().filter(page => page.url().startsWith('https://chatgpt.com')).length, 1);
+      assert.equal(settingsRequests, 0);
+      assert.ok(sessionRequests >= 1 && usageRequests >= 1);
+      assert.equal((await saved()).source, 'direct-session');
+      const stored = await worker.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
+      assert.equal(JSON.stringify(stored).includes(fixtureToken), false);
+      assert.equal((await chat.content()).includes(fixtureToken), false);
       const tabs = await worker.evaluate(() => chrome.tabs.query({ active: true, lastFocusedWindow: true }));
       assert.equal(tabs[0].url, 'https://chatgpt.com/c/test');
       const formRect = await chat.locator('form').boundingBox();
@@ -104,8 +123,7 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await new Promise(resolve => setTimeout(resolve, 800));
       assert.equal((await saved()).windows.weekly.remaining, 99);
     });
-    const source = context.pages().find(page => page.url() === 'https://chatgpt.com/settings/usage');
-    await step('refresh alarm updates the overlay from a newly loaded source page', async () => {
+    await step('refresh alarm updates usage without navigation or page reloads', async () => {
       amounts = [63, 80];
       await worker.evaluate(async () => {
         const { reader } = await chrome.storage.session.get('reader');
@@ -117,7 +135,27 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await bar.getByText('63% left', { exact: true }).waitFor();
       assert.equal(await bar.getByRole('progressbar', { name: '5-hour allowance remaining', exact: true }).getAttribute('value'), '63');
       assert.equal(await bar.getByRole('progressbar', { name: 'Weekly allowance remaining', exact: true }).getAttribute('value'), '80');
-      assert.equal(context.pages().filter(page => page.url() === source.url()).length, 1);
+      assert.equal(context.pages().filter(page => page.url().startsWith('https://chatgpt.com')).length, 1);
+      assert.equal(settingsRequests, 0); assert.equal(chatRequests, 1);
+    });
+    await step('HTTP 429 preserves the last reading and honors backoff without creating a tab', async () => {
+      usageMode = 'rate-limited';
+      await worker.evaluate(async () => {
+        const { reader } = await chrome.storage.session.get('reader'); reader.nextAt = 0; reader.attemptAt = 0;
+        await chrome.storage.session.set({ reader });
+        await chrome.alarms.create('usage-reader-poll', { when: Date.now() + 1000 });
+      });
+      await eventually(() => worker.evaluate(async () => (await chrome.storage.local.get('readerStatus')).readerStatus.state === 'error'));
+      assert.equal((await saved()).windows.weekly.remaining, 80);
+      assert.ok(await worker.evaluate(async () => (await chrome.storage.session.get('reader')).reader.nextAt > Date.now() + 250000));
+      assert.equal(settingsRequests, 0);
+      usageMode = 'ok';
+      await worker.evaluate(async () => {
+        const { reader } = await chrome.storage.session.get('reader'); reader.nextAt = 0; reader.attemptAt = 0; reader.failures = 0;
+        await chrome.storage.session.set({ reader });
+        await chrome.alarms.create('usage-reader-poll', { when: Date.now() + 1000 });
+      });
+      await eventually(() => worker.evaluate(async () => (await chrome.storage.local.get('readerStatus')).readerStatus.state === 'ready'));
     });
     await step('recovers after the app replaces its composer', async () => {
       await chat.locator('#composer-root').evaluate((el, html) => { el.innerHTML = html; }, composer);
@@ -174,24 +212,27 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       assert.equal(await popup.locator('textarea').count(), 0);
       await popup.locator('#automatic').uncheck();
       await eventually(() => worker.evaluate(async () => (await chrome.storage.local.get('autoEnabled')).autoEnabled === false));
-      amounts = [20, 30];
-      await source.reload();
+      const before = usageRequests;
+      await popup.locator('#refresh').click();
       await new Promise(resolve => setTimeout(resolve, 800));
       assert.equal((await saved()).windows.weekly.remaining, 80);
+      assert.equal(usageRequests, before);
       showLogin = true;
-      await source.reload();
       await popup.locator('#automatic').check();
     });
-    await step('a missing or signed-out source preserves the last read and reports failure', async () => {
+    await step('signing out clears previous account values and never opens an automatic fallback tab', async () => {
       showLogin = true;
       await worker.evaluate(async () => {
         const { reader } = await chrome.storage.session.get('reader');
-        reader.deadline = Date.now() - 1;
+        reader.deadline = 0; reader.nextAt = 0; reader.attemptAt = 0; reader.failures = 0;
         await chrome.storage.session.set({ reader });
-        await chrome.alarms.create('usage-reader-timeout', { when: Date.now() + 1000 });
+        await chrome.alarms.create('usage-reader-poll', { when: Date.now() + 1000 });
       });
       await eventually(() => worker.evaluate(async () => (await chrome.storage.local.get('readerStatus')).readerStatus.state === 'error'));
-      assert.equal((await saved()).windows.weekly.remaining, 80);
+      assert.equal(await saved(), undefined);
+      await eventually(async () => await bar.getByRole('progressbar').count() === 0);
+      assert.equal(settingsRequests, 0);
+      assert.equal(context.pages().filter(page => page.url().startsWith('https://chatgpt.com')).length, 1);
     });
     diagnostics.stage = 'passed';
   } catch (error) {
@@ -204,9 +245,7 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       try {
         diagnostics.storage = await worker.evaluate(async () => {
           const local = await chrome.storage.local.get(null), session = await chrome.storage.session.get(null);
-          let probe;
-          try { probe = await chrome.tabs.sendMessage(session.reader?.tabId, { type: 'READER_DIAGNOSTICS' }); } catch (error) { probe = { error: error.message }; }
-          return { local, session, probe };
+          return { local, session };
         });
       } catch {}
     }

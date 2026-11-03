@@ -42,12 +42,12 @@
       if (result?.paused) status('Turn on Read Usage automatically first.');
       else if (result?.waiting) status('A check was requested recently. The automatic reader will update shortly.');
       else if (result?.idle) status('Open a ChatGPT chat first.');
-      else if (!result?.ok) status('Reader could not start. Choose Open Usage reader to check the page.');
+      else if (!result?.ok) await render();
     } catch { status('Reload the extension and try again.'); }
     finally { $('refresh').disabled = false; }
   });
   $('open').addEventListener('click', () => {
-    chrome.runtime.sendMessage({ type: 'OPEN_READER' }).catch(() => status('Could not open the reader.'));
+    chrome.runtime.sendMessage({ type: 'OPEN_USAGE' }).catch(() => status('Could not open Usage settings.'));
   });
   for (const [id, key] of [['enabled', 'overlayEnabled'], ['automatic', 'autoEnabled']]) {
     $(id).addEventListener('change', async () => {

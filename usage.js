@@ -29,7 +29,7 @@
   function valid(snapshot, now = Date.now()) {
     if (!snapshot || snapshot.version !== 1 || !Number.isFinite(snapshot.capturedAt)) return null;
     if (snapshot.capturedAt > now + 60000 || now - snapshot.capturedAt >= MAX_AGE) return null;
-    if (!['visible-settings', 'pasted-settings', 'automatic-reader'].includes(snapshot.source)) return null;
+    if (!['visible-settings', 'pasted-settings', 'automatic-reader', 'direct-session'].includes(snapshot.source)) return null;
     const windows = {};
     for (const key of ['fiveHour', 'weekly']) {
       const item = snapshot.windows?.[key];
@@ -45,7 +45,24 @@
   function snapshot(windows, source) {
     return { version: 1, capturedAt: Date.now(), source, windows };
   }
-  const api = Object.freeze({ parse, valid, age, snapshot });
+  function fromAPI(payload, now = Date.now()) {
+    if (!payload || typeof payload !== 'object' || !payload.rate_limit) return null;
+    const windows = {};
+    for (const item of [payload.rate_limit.primary_window, payload.rate_limit.secondary_window]) {
+      if (!item || typeof item !== 'object') continue;
+      const key = item.limit_window_seconds === 18000 ? 'fiveHour' : item.limit_window_seconds === 604800 ? 'weekly' : null;
+      if (!key) continue;
+      if (typeof item.used_percent !== 'number' || !Number.isFinite(item.used_percent) || item.used_percent < 0 || item.used_percent > 100 || windows[key]) return null;
+      const remaining = Math.round((100 - item.used_percent) * 10) / 10;
+      let timestamp = null;
+      if (Number.isSafeInteger(item.reset_at) && item.reset_at > 0 && item.reset_at < 100000000000) timestamp = item.reset_at * 1000;
+      else if (Number.isSafeInteger(item.reset_after_seconds) && item.reset_after_seconds >= 0 && item.reset_after_seconds <= 31536000) timestamp = now + item.reset_after_seconds * 1000;
+      const reset = timestamp === null ? null : new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp));
+      windows[key] = { remaining, reset };
+    }
+    return Object.keys(windows).length ? windows : null;
+  }
+  const api = Object.freeze({ parse, valid, age, snapshot, fromAPI });
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else globalThis.UsageUnderChat = api;
 })();

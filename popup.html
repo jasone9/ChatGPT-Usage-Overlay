@@ -2,9 +2,9 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Usage Under Chat</title><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <div class="eyebrow">USAGE UNDER CHAT <span>v0.2.1</span></div>
+  <div class="eyebrow">USAGE UNDER CHAT <span>v0.3.0</span></div>
   <h1>Your allowance, nearby.</h1>
-  <p class="intro">Usage is read automatically. No copying or screenshots.</p>
+  <p class="intro">Automatic usage checks through your current ChatGPT tab.</p>
   <section id="summary" aria-label="Latest usage"><p>Starting automatic reader…</p></section>
   <p id="captured" class="muted"></p>
   <label class="toggle"><input type="checkbox" id="automatic" checked> Read Usage automatically</label>
@@ -12,8 +12,8 @@
   <hr>
   <p id="status" role="status" aria-live="polite">Starting automatic reader…</p>
   <button id="refresh" class="primary" type="button">Refresh now</button>
-  <button id="open" class="secondary" type="button">Open Usage reader</button>
-  <p class="fine">One Usage tab stays open in the background. We check it about every 2 minutes while a ChatGPT chat is open. Values belong to the account and workspace selected in that tab. Failed reads retry more slowly. Last-read times are always shown.</p>
+  <button id="open" class="secondary" type="button">Open Usage settings</button>
+  <p class="fine">No extra tab is needed. Usage is checked about every 2 minutes while ChatGPT is open. Your session credential is used only in memory for requests to ChatGPT. Last-read times are always shown; failed reads retry more slowly.</p>
   <div class="footer"><span>Stored only in this Chrome profile · No API key</span></div>
   <script src="usage.js"></script><script src="popup.js"></script>
 </body>
