@@ -87,6 +87,9 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       await eventually(async () => (await saved())?.windows?.weekly?.remaining === 99);
       await bar.getByText('94% left', { exact: true }).waitFor();
       await bar.getByText('99% left', { exact: true }).waitFor();
+      assert.equal(await bar.getByRole('progressbar').count(), 2);
+      assert.equal(await bar.getByRole('progressbar', { name: '5-hour allowance remaining', exact: true }).getAttribute('value'), '94');
+      assert.equal(await bar.getByRole('progressbar', { name: 'Weekly allowance remaining', exact: true }).getAttribute('value'), '99');
       assert.match(await bar.locator('#age').innerText(), /Auto · read just now/);
       const source = context.pages().filter(page => page.url() === 'https://chatgpt.com/settings/usage');
       assert.equal(source.length, 1);
@@ -112,6 +115,8 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
       });
       await eventually(async () => (await saved())?.windows?.weekly?.remaining === 80);
       await bar.getByText('63% left', { exact: true }).waitFor();
+      assert.equal(await bar.getByRole('progressbar', { name: '5-hour allowance remaining', exact: true }).getAttribute('value'), '63');
+      assert.equal(await bar.getByRole('progressbar', { name: 'Weekly allowance remaining', exact: true }).getAttribute('value'), '80');
       assert.equal(context.pages().filter(page => page.url() === source.url()).length, 1);
     });
     await step('recovers after the app replaces its composer', async () => {
@@ -122,10 +127,49 @@ test('automatic reader in a real Chromium extension', { timeout: 120000 }, async
     await step('fits a narrow viewport without horizontal overflow', async () => {
       await chat.setViewportSize({ width: 390, height: 844 });
       await bar.getByText('63% left', { exact: true }).waitFor();
+      const progressRect = await bar.getByRole('progressbar').first().boundingBox();
+      assert.equal(progressRect.width, 40);
+      assert.ok(progressRect.height > 0);
       assert.equal(await chat.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     });
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${id}/popup.html`);
+    await step('progress bars show remaining allowance, boundaries, warnings, and missing readings in both surfaces', async () => {
+      const previous = await saved();
+      const chatFive = bar.getByRole('progressbar', { name: '5-hour allowance remaining', exact: true });
+      const popupFive = popup.getByRole('progressbar', { name: '5-hour allowance remaining', exact: true });
+      const popupWeekly = popup.getByRole('progressbar', { name: 'Weekly allowance remaining', exact: true });
+      await popupFive.waitFor();
+      assert.equal(await popupFive.getAttribute('value'), '63');
+      assert.equal(await popupWeekly.getAttribute('value'), '80');
+      const setWindows = async windows => {
+        await worker.evaluate(async ({ previous, windows }) => {
+          await chrome.storage.local.set({ usageSnapshot: { ...previous, windows } });
+        }, { previous, windows });
+      };
+      await setWindows({ fiveHour: { remaining: 0 }, weekly: { remaining: 100 } });
+      await eventually(async () => await chatFive.getAttribute('value') === '0' && await popupFive.getAttribute('value') === '0');
+      assert.equal(await chatFive.evaluate(el => el.position), 0);
+      assert.equal(await popupWeekly.evaluate(el => el.position), 1);
+      assert.equal(await popupFive.getAttribute('aria-valuetext'), '0% remaining');
+      await setWindows({ fiveHour: { remaining: 10 }, weekly: { remaining: 25 } });
+      await eventually(async () => await chatFive.getAttribute('value') === '10' && await popupWeekly.getAttribute('value') === '25');
+      assert.equal(await chatFive.evaluate(el => el.classList.contains('low')), true);
+      assert.equal(await popupWeekly.evaluate(el => el.classList.contains('warn')), true);
+      assert.equal(await chatFive.evaluate(el => getComputedStyle(el).getPropertyValue('--fill').trim()), '#ff9999');
+      await chat.emulateMedia({ colorScheme: 'light' });
+      await popup.emulateMedia({ colorScheme: 'light' });
+      assert.equal(await chatFive.evaluate(el => getComputedStyle(el).getPropertyValue('--fill').trim()), '#ba3f3f');
+      assert.equal(await popupWeekly.evaluate(el => getComputedStyle(el).getPropertyValue('--fill').trim()), '#98620c');
+      await setWindows({ fiveHour: { remaining: 50 } });
+      await eventually(async () => await bar.getByRole('progressbar').count() === 1 && await popup.getByRole('progressbar').count() === 1);
+      await setWindows({});
+      await eventually(async () => await bar.getByRole('progressbar').count() === 0 && await popup.getByRole('progressbar').count() === 0);
+      await setWindows(previous.windows);
+      await eventually(async () => await chatFive.getAttribute('value') === '63' && await popupWeekly.getAttribute('value') === '80');
+      await chat.emulateMedia({ colorScheme: 'dark' });
+      await popup.emulateMedia({ colorScheme: 'dark' });
+    });
     await step('popup can pause automatic reads without a paste or screenshot flow', async () => {
       assert.equal(await popup.locator('textarea').count(), 0);
       await popup.locator('#automatic').uncheck();

@@ -93,6 +93,11 @@
       .brand { display:inline-flex; align-items:center; gap:5px; font-weight:600; }
       .dot { width:6px; height:6px; border-radius:50%; background:#819087; }
       .metric { display:inline-flex; gap:5px; align-items:center; white-space:nowrap; }
+      .allowance-bar { --fill:#15664d; --track:#dbe5de; appearance:none; width:56px; height:6px; flex:none; border:0; border-radius:999px; overflow:hidden; background:var(--track); accent-color:var(--fill); }
+      .allowance-bar.warn { --fill:#98620c; } .allowance-bar.low { --fill:#ba3f3f; }
+      .allowance-bar::-webkit-progress-bar { background:var(--track); border-radius:999px; }
+      .allowance-bar::-webkit-progress-value { background:var(--fill); border-radius:999px; }
+      .allowance-bar::-moz-progress-bar { background:var(--fill); border-radius:999px; }
       strong { color:#15664d; font-weight:650; font-variant-numeric:tabular-nums; }
       .warn { color:#98620c; } .low { color:#ba3f3f; }
       .reset { font-size:11px; opacity:.85; }
@@ -101,8 +106,8 @@
       .age { opacity:.85; font-size:11px; } .stale { color:#98620c; }
       .help { max-width:540px; margin:6px auto; padding:12px 14px; border:1px solid #d4dcd7; border-radius:12px; background:#f7faf8; text-align:left; color:#45584c; box-shadow:0 4px 16px #00000008; }
       .help p { margin:0 0 8px; } .help p:last-child { margin-bottom:0; } .help b { font-weight:650; }
-      @media (prefers-color-scheme:dark) { .wrap { color:#a6b4ab; } strong { color:#80d2b3; } .warn,.stale { color:#e4b96a; } .low { color:#ff9999; } .help { background:#232b26; border-color:#3a483e; color:#c2d0c7; } }
-      @media (max-width:520px) { .reset { display:none; } .bar { gap:3px 8px; } }
+      @media (prefers-color-scheme:dark) { .wrap { color:#a6b4ab; } strong { color:#80d2b3; } .warn,.stale { color:#e4b96a; } .low { color:#ff9999; } .help { background:#232b26; border-color:#3a483e; color:#c2d0c7; } .allowance-bar { --fill:#80d2b3; --track:#3a483e; } .allowance-bar.warn { --fill:#e4b96a; } .allowance-bar.low { --fill:#ff9999; } }
+      @media (max-width:520px) { .reset { display:none; } .bar { gap:3px 8px; } .allowance-bar { width:40px; } }
     </style><div class="wrap"><div class="bar" aria-label="ChatGPT usage, read automatically">
       <span class="brand"><span class="dot" aria-hidden="true"></span>Usage</span>
       <span id="metrics" style="display:contents"></span>
@@ -143,7 +148,13 @@
       const name = document.createElement('span'); name.textContent = label;
       const value = document.createElement('strong'); value.textContent = `${item.remaining}% left`;
       if (item.remaining <= 10) value.className = 'low'; else if (item.remaining <= 25) value.className = 'warn';
-      span.append(name, value);
+      const progress = document.createElement('progress');
+      progress.className = `allowance-bar ${value.className}`.trim();
+      progress.max = 100; progress.value = item.remaining;
+      progress.setAttribute('aria-label', `${key === 'fiveHour' ? '5-hour' : 'Weekly'} allowance remaining`);
+      progress.setAttribute('aria-valuetext', `${item.remaining}% remaining`);
+      progress.textContent = `${item.remaining}%`;
+      span.append(name, progress, value);
       if (item.reset) {
         const reset = document.createElement('span'); reset.className = 'reset'; reset.textContent = `↻ ${item.reset}`;
         span.title = `Reset shown at capture: ${item.reset}`; span.append(reset);

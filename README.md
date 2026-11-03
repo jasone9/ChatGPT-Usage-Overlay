@@ -17,6 +17,10 @@ Example appearance (illustrative values):
 
 **Usage · 5h 94% left ↻ 6:25 PM · Weekly 99% left · Auto · read just now**
 
+Version 0.2.1 adds a progress bar beside each allowance beneath the composer and below each allowance in the extension popup. The fill shows the percentage **remaining**: a full bar means 100% left. Bars turn amber at 25% remaining and red at 10%, with numeric percentages and accessible labels alongside them. Both light and dark themes are supported.
+
+To update an existing installation, replace the files in the folder you originally loaded, click the extension's **Reload** button on `chrome://extensions`, and refresh your ChatGPT tabs.
+
 ## Controls
 
 - **Refresh** under the composer or **Refresh now** in the extension popup requests an earlier check. There is a one-minute minimum between attempts.
@@ -88,4 +92,4 @@ The build workspace could run the fast tests and syntax checks. It could not lau
 - [Chrome tab permissions and APIs](https://developer.chrome.com/docs/extensions/reference/api/tabs)
 - [Playwright extension testing](https://playwright.dev/docs/chrome-extensions)
 
-Independent prototype; not affiliated with OpenAI. Version **0.2.0**.
+Independent prototype; not affiliated with OpenAI. Version **0.2.1**.

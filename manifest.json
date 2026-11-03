@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Usage Under Chat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Automatically read ChatGPT Usage in a background tab and show 5-hour and weekly allowances beneath the composer.",
   "minimum_chrome_version": "111",
   "permissions": [

@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-usage-overlay",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Automatic ChatGPT Usage reader and composer overlay",
   "devDependencies": { "playwright": "^1.56.0" },

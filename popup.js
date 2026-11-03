@@ -16,11 +16,19 @@
       } else {
         for (const [key, label] of [['fiveHour', '5-hour allowance'], ['weekly', 'Weekly allowance']]) {
           const item = reading.windows[key]; if (!item) continue;
+          const allowance = document.createElement('div'); allowance.className = 'allowance';
           const row = document.createElement('div'); row.className = 'row';
           const text = document.createElement('div'); text.textContent = label;
           if (item.reset) { const reset = document.createElement('div'); reset.className = 'reset'; reset.textContent = `Resets ${item.reset}`; text.append(reset); }
           const value = document.createElement('strong'); value.textContent = `${item.remaining}%`;
-          row.append(text, value); $('summary').append(row);
+          const level = item.remaining <= 10 ? 'low' : item.remaining <= 25 ? 'warn' : '';
+          if (level) value.className = level;
+          const progress = document.createElement('progress'); progress.className = `allowance-bar ${level}`.trim();
+          progress.max = 100; progress.value = item.remaining;
+          progress.setAttribute('aria-label', `${label} remaining`);
+          progress.setAttribute('aria-valuetext', `${item.remaining}% remaining`);
+          progress.textContent = `${item.remaining}%`;
+          row.append(text, value); allowance.append(row, progress); $('summary').append(allowance);
         }
         $('captured').textContent = `Last read ${U.age(reading.capturedAt)} · ${new Date(reading.capturedAt).toLocaleString()}`;
       }
